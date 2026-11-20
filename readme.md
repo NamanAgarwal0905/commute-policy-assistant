@@ -1,122 +1,573 @@
 # Commute Policy Assistant
 
-A multi-tenant RAG service that answers employees' transport-policy questions **from their own company's
-current policy only**, cites document + section, and says "the policy does not say" when it doesn't.
+A multi-tenant, Retrieval-Augmented Generation (RAG) application that answers employees' commute and transport-policy questions using **only their own company's active policy**.
 
-Stack: Python · FastAPI · Chroma · MiniLM embeddings · Groq/Gemini LLM · JWT · SQLite · Docker.
+The assistant provides answers grounded in policy documents, cites the relevant document and section, and explicitly says when a question is not covered.
 
-> Core rule: the LLM *explains* evidence. It never decides identity, tenant, policy version, authorisation or citations - plain code does.
+**Core principle:** The LLM explains the evidence. Authentication, tenant isolation, policy-version selection, retrieval filtering, and citation validation are handled by application code.
 
-## Run it (one command)
+## 1. Quick Start — Run the Entire Application
+
+### Prerequisites
+
+- Docker Desktop installed and running
+- Git
+
+You do not need to install Python, create a virtual environment, or configure an API key to run the offline demo.
+
+### Step 1: Clone the repository
+
+```bash
+git clone https://github.com/NamanAgarwal0905/commute-policy-assistant.git
+cd commute-policy-assistant
+```
+
+### Step 2: Start the application
+
+Run this **single command**:
 
 ```bash
 docker compose up --build
 ```
 
-Open <http://localhost:8000/docs>. The demo data (3 companies, 6 users, 3 policies) is loaded automatically and idempotently at startup.
-With no configuration the LLM is an **offline extractive stand-in** (no key needed). For real answers:
+That's it!
+
+Docker builds the application, installs its dependencies, and starts the FastAPI service. Demo data is automatically initialized at startup.
+
+### Step 3: Verify that it is running
+
+Open:
+
+**http://localhost:8000/docs**
+
+This opens the interactive Swagger UI, where you can explore and test the API endpoints.
+
+You can also check the health endpoint:
+
+```text
+http://localhost:8000/health
+```
+
+The application includes demo data for three fictional companies: Acme, Northstar, and Orbit.
+
+> **Default mode:** The application uses an offline extractive LLM stand-in when no provider is configured. No API key is required for the basic demo.
+
+---
+
+## 2. Configure a Real LLM (Optional)
+
+The application supports Groq and Gemini in addition to the offline extractive provider.
+
+If you want to use a real LLM:
+
+### Step 1: Create your environment file
+
+**Windows PowerShell:**
+
+```powershell
+Copy-Item .env.example .env
+```
+
+**Linux/macOS:**
 
 ```bash
-cp .env.example .env        # then set LLM_PROVIDER=groq (or gemini) and LLM_API_KEY=...  (free tiers; never commit .env)
+cp .env.example .env
+```
+
+### Step 2: Update `.env`
+
+For Groq:
+
+```dotenv
+LLM_PROVIDER=groq
+LLM_API_KEY=your_groq_api_key
+LLM_MODEL=
+```
+
+For Gemini:
+
+```dotenv
+LLM_PROVIDER=gemini
+LLM_API_KEY=your_gemini_api_key
+LLM_MODEL=
+```
+
+Leave `LLM_MODEL` empty to use the provider-specific default documented in `.env.example`.
+
+Never commit `.env` or expose your API key.
+
+### Step 3: Restart the application
+
+```bash
 docker compose up --build
 ```
 
-| Command | What it does |
+The application will now use the configured provider.
+
+---
+
+## 3. Run Automated Tests
+
+Keep the application running and open a **second terminal** in the project directory.
+
+Run:
+
+```bash
+docker compose exec api pytest -q
+```
+
+The automated test suite covers:
+
+- Authentication and JWT validation
+- Tenant isolation and cross-company access prevention
+- Policy ingestion and version management
+- Retrieval correctness
+- Question-answering behaviour
+- Evaluation-set validation
+
+The tests use controlled test doubles and offline components where appropriate, so they do not require a real LLM API key.
+
+---
+
+## 4. Run the Evaluation Suite
+
+The project includes a 26-question evaluation dataset.
+
+Run:
+
+```bash
+docker compose exec api python -m scripts.evaluate
+```
+
+The evaluation measures:
+
+| Metric | What it measures |
 |---|---|
-| `docker compose exec api pytest -q` | 95 tests, fully offline (fake LLM, offline embedder) |
-| `docker compose exec api python -m scripts.evaluate` | run the 26-case evaluation set, write `evaluation/results.jsonl` |
-| `docker compose exec api python -m scripts.evaluate --repeat 5` | repeat each question 5x → more latency samples (p50/p95) |
-| `docker compose exec api python -m scripts.evaluate --compare` | **bonus**: fixed-size vs section-aware chunking, same cases |
-| `docker compose exec api python -m scripts.evaluate --show-distances` | print retrieval distances to help choose `MAX_DISTANCE` |
+| Answer correctness | Whether the response matches the expected answer |
+| Retrieval Hit@3 | Whether relevant evidence appears in the top 3 retrieved chunks |
+| Citation validity | Whether citations refer to retrieved evidence |
+| Citation coverage | Whether required sources are cited |
+| Abstention precision | Whether abstentions are appropriate |
+| Abstention recall | Whether unsupported questions are correctly rejected |
+| Tenant leakage | Whether another company's data is exposed |
+| Version leakage | Whether inactive policy versions are retrieved |
+| p50 / p95 latency | Response-time performance |
 
-Without Docker: `pip install -r requirements.txt`, `export JWT_SECRET=<32+ random chars>`, `AUTO_SEED=true uvicorn app.main:app`.
+### Latest evaluation results
 
-## Try it
+<text>Measured using Groq with `openai/gpt-oss-20b` and MiniLM embeddings.</text>
 
-Demo users (password `demo-pass`): `acme_employee`, `northstar_employee`, `orbit_employee`, and `<company>_admin`.
+| Metric | Result |
+|---|---:|
+| Evaluation cases | 26 |
+| Passed | **26 / 26** |
+| Answer correctness | 1.00 |
+| Retrieval Hit@3 | 1.00 |
+| Citation validity | 1.00 |
+| Citation coverage | 1.00 |
+| Abstention precision | 1.00 |
+| Abstention recall | 1.00 |
+| Tenant leakage | 0 |
+| Version leakage | 0 |
+| Average LLM calls | 1 |
+| p50 latency | 1,188.2 ms |
+| p95 latency | **1,591.5 ms** |
+
+These are results from the measured evaluation run, not a guarantee of performance across all possible questions.
+
+The evaluation generates:
+
+- `evaluation/results.jsonl`
+- `evaluation/metrics.json`
+
+### Additional evaluation commands
 
 ```bash
-TOKEN=$(curl -s localhost:8000/auth/token -H 'content-type: application/json' \
-  -d '{"username":"acme_employee","password":"demo-pass"}' | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+# Repeat each question five times for additional latency samples
+docker compose exec api python -m scripts.evaluate --repeat 5
 
-curl -s localhost:8000/questions -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"question":"Can I book a cab on Saturday?"}'
+# Compare fixed-size and section-aware chunking
+docker compose exec api python -m scripts.evaluate --compare
+
+# Inspect retrieval distances
+docker compose exec api python -m scripts.evaluate --show-distances
 ```
 
-Response statuses: `answered` (200, with `citations`), `not_covered` (200, points to the transport desk), `retry` (503 + `Retry-After`, "try again").
+---
 
-| Endpoint | Auth | Purpose |
+## 5. Start the Interactive Terminal Chatbot
+
+The project also includes a simple terminal-based chatbot.
+
+Make sure Docker Compose is running, then open another terminal and execute:
+
+```bash
+docker compose exec api python -m scripts.chat
+```
+
+### Step 1: Log in
+
+Use one of the demo employee accounts:
+
+| Company | Username | Password |
 |---|---|---|
-| `POST /auth/token` | none (demo) | username+password → JWT (`sub`, `company_id`, `role`, `iat`, `exp`) |
-| `POST /questions` | employee JWT | `{"question": "..."}` only. A `company_id` field is rejected (422) |
-| `POST /admin/policies` | admin JWT | ingest a new policy version for the **admin's own** company |
-| `GET /admin/policies/versions`, `/active` | admin JWT | list versions / show active one |
-| `GET /health` | none | checks SQLite and Chroma |
+| Acme | `acme_employee` | `demo-pass` |
+| Northstar | `northstar_employee` | `demo-pass` |
+| Orbit | `orbit_employee` | `demo-pass` |
 
-Demo of versioning: log in as `acme_admin`, `POST /admin/policies` with `data/policies/acme_transport_policy_v2.md`
-(`version: "v2"`) → the escort threshold changes from 8 PM to 9 PM and the Saturday rule changes; v1 stops answering immediately.
+Admin accounts are also available:
 
-## How a question flows
+- `acme_admin`
+- `northstar_admin`
+- `orbit_admin`
 
+The demo password is `demo-pass`.
+
+### Step 2: Ask questions
+
+For example:
+
+```text
+You: Can I book a cab on Saturday?
+
+Assistant (answered):
+[Policy-based answer]
+
+Sources:
+- acme_transport_policy_v1.md
+  Section: Weekend Travel
 ```
-JWT ──verify signature, expiry, required claims, pinned algorithm──► user must match SQLite (same company + role)
- └─► company_id (from token ONLY) ─► active version (SQLite) ─► Chroma query WHERE company_id AND policy_version
-      └─► re-check every returned chunk's company/version (fail closed) ─► distance threshold ─► ≤3 chunks
-           └─► 0 chunks? "not covered" (no LLM call)
-           └─► ONE LLM call (passages delimited + escaped, told they are untrusted data)
-                └─► validate JSON; every cited id must be one of the retrieved ids
-                     └─► citations built from OUR stored metadata (document, section, chunk id)
+
+You can also try questions that are not covered by the policy:
+
+```text
+You: Are pets allowed in company cabs?
+
+Assistant (not_covered):
+The current transport policy does not cover this.
+Please contact your transport desk.
 ```
 
-| File | Responsibility |
+Type `exit` or `quit` to end the conversation.
+
+---
+
+## 6. API Endpoints
+
+The API is built using FastAPI.
+
+| Endpoint | Authentication | Purpose |
+|---|---|---|
+| `POST /auth/token` | None (demo) | Authenticate a user and issue a JWT |
+| `POST /questions` | Employee JWT | Ask a transport-policy question |
+| `POST /admin/policies` | Admin JWT | Ingest a new policy version |
+| `GET /admin/policies/versions` | Admin JWT | List policy versions |
+| `GET /admin/policies/active` | Admin JWT | View the active policy version |
+| `GET /health` | None | Check application health |
+
+### Example: Authentication
+
+```json
+{
+  "username": "acme_employee",
+  "password": "demo-pass"
+}
+```
+
+The response contains an access token.
+
+### Example: Ask a question
+
+```json
+{
+  "question": "Can I book a cab on Saturday?"
+}
+```
+
+Pass the JWT in the request header:
+
+```text
+Authorization: Bearer <access_token>
+```
+
+**Important:** The question API does not accept a client-provided `company_id`. The company is derived exclusively from the verified JWT.
+
+### Response statuses
+
+| Status | HTTP code | Meaning |
+|---|---:|---|
+| `answered` | 200 | A grounded answer was generated |
+| `not_covered` | 200 | The policy does not provide sufficient evidence |
+| `retry` | 503 | A temporary service or processing failure occurred |
+
+---
+
+## 7. Policy Versioning Demo
+
+The application supports policy ingestion and version management.
+
+For example, Acme has two policy versions:
+
+- `acme_transport_policy_v1.md`
+- `acme_transport_policy_v2.md`
+
+To demonstrate versioning:
+
+1. Log in using `acme_admin`.
+2. Submit a new policy version through `POST /admin/policies`.
+3. Ingest Acme's v2 policy.
+4. Ask a question about the escort timing.
+5. Observe that the response uses v2 instead of v1.
+
+The Acme policy changes its escort threshold from 8 PM to 9 PM in v2, along with its Saturday travel rule.
+
+The previous version becomes inactive and is no longer used for answering questions.
+
+---
+
+## 8. How the System Works
+
+### High-level architecture
+
+```text
+                 Employee
+                    |
+                    v
+              FastAPI API
+                    |
+                    v
+              JWT Validation
+                    |
+                    v
+          Identify Company from JWT
+                    |
+                    v
+          Get Active Policy Version
+                    |
+                    v
+          ChromaDB Vector Retrieval
+                    |
+          Company + Version Filter
+                    |
+                    v
+            Evidence Validation
+                    |
+             Top 3 Chunks
+                    |
+                    v
+               LLM Answer
+                    |
+                    v
+           Validate LLM Output
+                    |
+                    v
+          Build Trusted Citations
+                    |
+                    v
+              Final Response
+```
+
+### Question-answering pipeline
+
+1. The user authenticates and receives a JWT.
+2. The API verifies the token signature, expiry, and required claims.
+3. The authenticated user is cross-checked against SQLite.
+4. The company ID is obtained from the verified token.
+5. The active policy version is retrieved from SQLite.
+6. ChromaDB searches only within that company and active version.
+7. Retrieved chunks are checked again for tenant and version consistency.
+8. A relevance threshold is applied, and at most three chunks are selected.
+9. The LLM generates a short answer using the retrieved evidence.
+10. The server validates the LLM response and constructs citations from stored metadata.
+
+The LLM never determines the user's identity, company, active policy version, or citation metadata.
+
+---
+
+## 9. Project Structure
+
+```text
+commute-policy-assistant/
+│
+├── app/
+│   ├── api/
+│   │   ├── auth.py
+│   │   ├── policies.py
+│   │   └── questions.py
+│   │
+│   ├── core/
+│   │   ├── config.py
+│   │   ├── container.py
+│   │   └── security.py
+│   │
+│   ├── db/
+│   │   ├── chroma.py
+│   │   ├── embeddings.py
+│   │   └── metadata.py
+│   │
+│   ├── services/
+│   │   ├── answer.py
+│   │   ├── ingestion.py
+│   │   ├── llm.py
+│   │   ├── retrieval.py
+│   │   └── seed.py
+│   │
+│   └── main.py
+│
+├── data/
+│   └── policies/
+│
+├── evaluation/
+│   ├── comparison.json
+│   ├── metrics.json
+│   ├── questions.jsonl
+│   └── results.jsonl
+│
+├── scripts/
+│   ├── chat.py
+│   ├── evaluate.py
+│   └── seed_data.py
+│
+├── tests/
+│
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── .env.example
+├── EVALUATION_REPORT.md
+└── readme.md
+```
+
+---
+
+## 10. Design Decisions and Security
+
+### Tenant isolation
+
+Tenant isolation is enforced at multiple layers:
+
+1. The company is obtained from a verified JWT and checked against the user record.
+2. The question request rejects unexpected fields such as `company_id`.
+3. ChromaDB retrieval always filters by both `company_id` and `policy_version`.
+4. Retrieved records are rechecked before being passed to the LLM.
+5. The LLM never receives another company's policy content.
+
+### Prompt injection protection
+
+Policy documents and user questions are treated as untrusted input.
+
+- Retrieved content is escaped and clearly delimited.
+- The system prompt instructs the model not to follow instructions contained in policy documents.
+- The model cannot access other tenants' policy content.
+- Invented citation IDs are rejected.
+
+Acme's policy contains a deliberate prompt-injection fixture to test this behaviour.
+
+### Citation validation
+
+The LLM returns chunk IDs rather than trusted citation text.
+
+The server verifies that each ID belongs to the retrieved evidence and builds the final citations using its own stored metadata.
+
+### Atomic policy version activation
+
+Policy ingestion follows this sequence:
+
+1. Register the new version as `staging`.
+2. Parse and chunk the policy.
+3. Index its chunks in ChromaDB.
+4. Verify the indexed content.
+5. Activate the new version and deactivate the previous version in a SQLite transaction.
+
+If ingestion fails, the new version is marked failed, partial chunks are deleted, and the previous active version remains available.
+
+SQLite and ChromaDB do not share a transaction. A crash between indexing and activation can leave orphan vectors, but these are never served and are reconciled at startup.
+
+### LLM call and latency constraints
+
+- Normal answering requires one LLM call.
+- Questions with no relevant evidence require zero LLM calls.
+- The application does not retry failed LLM responses.
+- At most three evidence chunks are passed to the LLM.
+- Provider failures and invalid responses produce a controlled retry response.
+
+The evaluation report contains measured latency and retrieval results.
+
+---
+
+## 11. Technology Stack
+
+| Component | Technology |
 |---|---|
-| `app/main.py` | wiring, startup seed, `/health` |
-| `app/api/{auth,questions,policies}.py` | HTTP only |
-| `app/core/{config,security,container}.py` | settings, JWT, object wiring |
-| `app/db/metadata.py` | SQLite: users, policy versions, **active version** |
-| `app/db/chroma.py` | Chroma; the tenant filter is built in one function |
-| `app/db/embeddings.py` | MiniLM (real) + offline hash embedder (tests) |
-| `app/services/ingestion.py` | parse → chunk → index → verify → activate / roll back |
-| `app/services/retrieval.py` | filtered search, tenant re-check, threshold, top-3 |
-| `app/services/llm.py` | prompt, provider call, strict output validation |
-| `app/services/answer.py` | the orchestration + failure handling |
-| `scripts/evaluate.py` | evaluation runner and metrics |
+| Backend | Python, FastAPI |
+| Vector database | ChromaDB (embedded) |
+| Embeddings | Sentence Transformers, MiniLM |
+| Offline embedding stand-in | Hash embedder |
+| LLM providers | Groq, Gemini |
+| Offline LLM stand-in | Extractive provider |
+| Metadata database | SQLite |
+| Authentication | JWT |
+| Containerization | Docker, Docker Compose |
+| Testing | Pytest |
 
-## Design decisions
+ChromaDB runs in embedded mode inside the API container. A separate ChromaDB server is not required.
 
-**Where the LLM is used - and where it is not.** The LLM does one thing: phrase a short answer from ≤3 passages. Plain code does authentication, tenant selection, version selection, filtering, the relevance cut-off, JSON validation, citation building, timeouts and error mapping. Those must be deterministic and testable; an LLM can be talked out of any of them.
+---
 
-**Tenant isolation (defence in depth).** (1) company comes only from a verified JWT, cross-checked with the user table; (2) `extra="forbid"` on the request body rejects a `company_id`; query-string/header overrides are simply never read; (3) Chroma is only reachable through `ChunkStore.query(company_id, version, ...)`, which always adds `company_id AND policy_version` - there is no "search everything" function and no endpoint exposing filters; (4) `Retriever` re-checks every returned row and raises `TenantViolation` → `retry`, so a bug or corrupted index fails closed; (5) the LLM never even sees another company's text, so a fully obedient model has nothing to leak.
+## 12. Trade-offs
 
-**Prompt injection.** Policy text and the question are untrusted. They are escaped (`<`,`>`), wrapped in `<passage>`/`<question>` tags, and the system prompt says never to follow instructions inside them. That is only a soft layer. The hard layers are above: even if the model is fooled it cannot see other tenants, and any citation id it invents is rejected. Acme's policy contains a deliberate `SYSTEM OVERRIDE` fixture to prove it.
+1. **Section-aware chunking:** Preserves policy sections and improves citation quality, but produces variable-sized chunks.
+2. **Relevance threshold plus LLM abstention:** A lenient threshold preserves potentially relevant evidence, while the LLM decides whether it supports an answer. Abstention quality therefore depends partly on the model.
+3. **No LLM retries:** Avoids doubling latency and consuming additional API quota, at the cost of returning a retry response for some recoverable model failures.
+4. **Embedded ChromaDB:** Simplifies deployment and enables one-command startup, but the API process owns the index and is not designed for horizontal scaling as-is.
+5. **Demo authentication:** Uses an application-managed JWT issuer for the case study. A production deployment should integrate with the company's identity provider.
+6. **Thread-based timeouts:** Prevents a request from waiting indefinitely, but stuck workers cannot be forcibly terminated and may consume worker capacity.
 
-**Citations are not trusted from the model.** The model returns chunk ids; the server checks each id is in the retrieved set (≤3), then builds `{document, section, chunk_id}` from stored metadata. Free text from the model is never used as a citation. (A second layer: citation building does a dict lookup that would also fail closed on an unknown id.)
+---
 
-**Policy versions.** The active version is a row in SQLite (`status='active'`) with a partial unique index → at most one active version per company, enforced by the database. Ingestion registers the new version as `staging`, indexes all chunks, verifies count and searchability, then flips old→`inactive`, new→`active` in **one transaction**. Any failure marks it `failed`, deletes the partial chunks and leaves the old version answering. Old versions stay in Chroma for audit but are never retrievable (the query always filters on the active version). *Limitation:* SQLite and Chroma have no shared transaction; a crash between "chunks written" and "activated" leaves orphan vectors. They are never served, and `reconcile_staging()` removes them at startup.
+## 13. Known Limitations
 
-**Staying within the numbers.**
-- *≤2 LLM calls:* the normal path makes **1** call; "nothing relevant found" makes **0**; there are **no retries**, so failures cost one call. `AnswerService._call_llm` hard-caps at 2 and the response reports `meta.llm_calls`.
-- *≤3 cited chunks:* `max_evidence=3` caps what is retrieved, what the LLM sees and what can be cited; the output validator also rejects >3 ids.
-- *p95 ≤ 3 s:* small prompt (≤3 short passages), `max_tokens=200`, `temperature=0`, a fast model (Groq llama-3.1-8b-instant default), local embeddings, warm-up at startup, pooled HTTP client. Timeouts: retrieval 0.8 s, LLM 2.0 s (+0.5 s wall-clock guard). The retrieval+validation part measured ~7 ms p95 offline; the LLM network call dominates, so the 3 s figure **must be measured with your real provider** (see the report).
+- Policy ingestion currently supports Markdown documents with `##` section headings; PDF parsing is not implemented.
+- English-language policies and questions are assumed.
+- Conversation memory is not maintained between questions.
+- Offline extractive LLM and hash embedding modes are demonstration/test stand-ins, not substitutes for real model quality.
+- Concurrent ingestion of the same company and policy version is not explicitly locked.
 
-**Failure behaviour.** Provider error/quota/timeout, malformed or non-JSON output, invented ids, vector store down, slow retrieval, DB errors, unexpected exceptions → all return the same `retry` response (HTTP 503, "please try again", no citations, no partial answer). No relevant evidence or the model abstaining → `not_covered` pointing to the transport desk.
+---
 
-## Trade-offs
+## 14. Useful Docker Commands
 
-1. **Section-aware chunking over fixed windows** (the bonus experiment). One chunk per policy section keeps a rule with its condition and gives exact section citations. Cost: chunk sizes vary, and a section that mixes two topics is retrieved as a whole. Result in `EVALUATION_REPORT.md`.
-2. **Threshold + LLM abstention, not threshold alone.** Distance cut-offs cannot separate "policy is silent" from "poorly phrased question" (shown by `--show-distances`: answerable and not-covered distances overlap). So the threshold is deliberately lenient and the LLM says `answerable:false`. Cost: abstention quality depends on the LLM.
-3. **No LLM retry on bad output.** A retry would fix some malformed outputs but double worst-case latency and burn free-tier quota. We return "try again" instead.
-4. **Embedded Chroma instead of a separate Chroma server.** One container, one command, fewer moving parts. Cost: the API process owns the index (no horizontal scaling). Swapping to `chromadb.HttpClient` is a one-line change in `app/db/chroma.py`.
-5. **Hash-based demo auth/JWT issuer in the app.** Fine for the case study; production would use the company's identity provider.
-6. **Thread-based timeouts.** `run_with_timeout` abandons a stuck worker rather than killing it; a pool of 8 could be exhausted by 8 simultaneous hangs. Acceptable here; a real deployment would use async clients with cancellation.
+| Command | Purpose |
+|---|---|
+| `docker compose up --build` | Build and start the application |
+| `docker compose up -d` | Start in the background |
+| `docker compose logs -f api` | View application logs |
+| `docker compose exec api pytest -q` | Run automated tests |
+| `docker compose exec api python -m scripts.evaluate` | Run evaluation |
+| `docker compose exec api python -m scripts.chat` | Launch terminal chatbot |
+| `docker compose down` | Stop the application |
 
-## Known limits
+**Note:** Avoid `docker compose down -v` unless you intentionally want to delete the persistent SQLite and ChromaDB storage.
 
-- No PDF parsing: policies are Markdown with `## ` section headings.
-- English only; no conversation memory (each question stands alone).
-- The offline `extractive` LLM and `hash` embedder are test stand-ins and cannot reflect real quality. Real MiniLM and Groq/Gemini numbers must be generated by running the evaluation on your machine.
-- Concurrent ingestion of the same company/version is not locked (the unique constraint makes the loser fail safely).
+---
 
-## 2-minute recording checklist
+## 15. Submission Demo Checklist
 
-1. `docker compose up --build` → `/docs` open. 2. Token for `acme_employee`; ask the Saturday question → answer + citation. 3. Ask "pets in cabs?" → not covered + transport desk. 4. Same Saturday question as `northstar_employee` → different answer (24 hours' notice). 5. As Acme, ask for "Northstar's escort threshold" and send a body with `company_id` → no leak / 422. 6. As `acme_admin` ingest v2 → ask the escort question → now 9 PM, `policy_version: v2`. 7. `pytest -q` and `scripts.evaluate` output.
+For a quick demonstration:
+
+1. Start the application with `docker compose up --build`.
+2. Open Swagger UI at `/docs`.
+3. Authenticate as `acme_employee`.
+4. Ask a question covered by the Acme policy and show its citation.
+5. Ask an unsupported question and show the `not_covered` response.
+6. Authenticate as `northstar_employee` and demonstrate that its policy produces a different answer.
+7. Try a cross-company question and verify that no other company's policy is exposed.
+8. Authenticate as `acme_admin` and ingest v2.
+9. Ask about the changed escort threshold and verify that v2 is active.
+10. Run the automated tests and evaluation suite.
+
+---
+
+**Repository:** https://github.com/NamanAgarwal0905/commute-policy-assistant
+
+**API Documentation:** http://localhost:8000/docs
