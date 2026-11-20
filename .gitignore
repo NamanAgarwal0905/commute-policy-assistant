@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+storage/
+chroma/
+*.db
+
+.pytest_cache/
+.coverage
+movelnsync_zip.zip

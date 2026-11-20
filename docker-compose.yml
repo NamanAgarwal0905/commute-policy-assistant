@@ -1,0 +1,21 @@
+
+services:
+  api:
+    build:
+      context: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      JWT_SECRET: ${JWT_SECRET:-demo-only-secret-change-me-0123456789abcdef}
+      AUTO_SEED: "true"
+      DATA_DIR: /storage
+      POLICIES_DIR: /app/data/policies
+    volumes:
+      - storage:/storage
+    restart: unless-stopped
+
+volumes:
+  storage:
