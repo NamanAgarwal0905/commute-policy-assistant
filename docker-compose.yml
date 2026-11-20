@@ -15,6 +15,7 @@ services:
       POLICIES_DIR: /app/data/policies
     volumes:
       - storage:/storage
+      - ./evaluation:/app/evaluation
     restart: unless-stopped
 
 volumes:

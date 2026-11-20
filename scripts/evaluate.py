@@ -158,7 +158,7 @@ def run_evaluation(chunk_mode="section", repeat=1, questions_path=QUESTIONS, llm
                     latencies.append((time.perf_counter() - t0) * 1000)
                     resp, http_status = r.json(), r.status_code
                     llm_calls.append(resp["meta"]["llm_calls"])
-                    time.sleep(12)
+                    time.sleep(4)
                 passed, notes, d = judge(case, resp, container)
 
                 agg["tenant"] += d["tenant_leak"]; agg["version"] += d["version_leak"]

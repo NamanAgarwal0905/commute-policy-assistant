@@ -3,7 +3,7 @@ the embedder is the offline 'hash' one and the LLM is a scriptable fake."""
 import json
 import os
 
-os.environ.setdefault("JWT_SECRET", "test-secret-test-secret-test-secret-123")
+os.environ["JWT_SECRET"] = "test-secret-test-secret-test-secret-123"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

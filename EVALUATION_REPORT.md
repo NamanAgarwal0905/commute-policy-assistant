@@ -1,89 +1,114 @@
-# Evaluation Report
+# Evaluation Report - Commute Policy Assistant
 
-## 1. What was measured, and what was not
+## 1. Executive summary
 
-| Configuration | Status |
-|---|---|
-| Offline stand-ins: `EMBEDDING_PROVIDER=hash`, `LLM_PROVIDER=extractive` | **Measured** (Section 4). Reproducible with no network or key. |
-| Real models: `EMBEDDING_PROVIDER=minilm` + Groq/Gemini | **Not measured in the build environment** (network to model hosts is blocked there). Fill in Section 6 by running the commands in the README on your machine. |
+The project has a fixed 26-case evaluation set and an automated test suite covering authentication, tenant isolation, ingestion/versioning, retrieval, question handling and evaluation-set integrity.
 
-The offline numbers are **not** a claim about real quality. The extractive stand-in never abstains by itself and the hash embedder is lexical, so they mostly demonstrate the harness, the isolation guarantees and the retrieval-structure experiment. I did not tune either stand-in to the evaluation set.
+Latest recorded results:
+- **Real-provider evaluation:** 26/26 cases passed.
+- **Configuration:** Groq `openai/gpt-oss-20b`, MiniLM embeddings, section-aware chunking.
+- **Latency:** p50 969.4 ms; p95 1,963.9 ms over 26 requests.
+- **Safety counters:** tenant leakage 0; version leakage 0.
+- **LLM calls:** average 1.0; maximum 1.
+- **Automated tests:** 95 passed in 371.74 seconds.
 
-## 2. Method
+The observed p95 is below the 3-second target in this run. With 26 latency samples, it is a useful measured result, not a robust production latency guarantee.
 
-- **Set:** `evaluation/questions.jsonl`, 26 cases, fields `id, input, expected, actual, pass, notes`. The committed file has `actual`/`pass` = null; the runner writes the filled copy to `evaluation/results.jsonl` (the gold file is never rewritten).
-- **Mix:** 8 Acme, 6 Northstar, 3 Orbit direct questions; 3 paraphrases (P01-P03, plus A02); 3 cross-company traps (X01-X03); 2 adversarial/injection cases (SEC01-SEC02); 4 "not covered" cases (A05 pets, N06 errands, O03 airport, NC04 EV charging).
-- **Gold is verified:** `tests/test_eval_set.py` checks that every required fact appears in the cited section of the actual policy file, that "forbidden" values do not appear in the asker's own policy, and that not-covered topics are really absent.
-- **Execution:** each run builds a fresh temp SQLite + Chroma from `data/policies/`, logs in through `/auth/token` as the case's company user, and calls `POST /questions` (body = question only). The HTTP layer is FastAPI's in-process TestClient.
-- **Judging (a case passes only if all hold):** status is allowed; for `answered`: every required fact is in the answer (case/number-normalised: "24-hour"="24 hours", "INR 1,500"="1500"), a cited section matches, ≥1 citation; for `not_covered`: message mentions the transport desk; no forbidden text; no cross-tenant or old-version chunk retrieved; ≤3 citations; ≤2 LLM calls; every citation matches stored metadata.
-- **Metrics:** answer correctness (pass rate); retrieval hit@3 (a gold section is among the ≤3 chunks given to the LLM, answerable cases); citation validity and coverage; abstention precision/recall; tenant and version leakage counts (must be 0); latency p50/p95 (client-side, per request, includes LLM when one is used); LLM calls average/max.
+## 2. Evaluation method
 
-## 3. Reproduce
+- **Set:** `evaluation/questions.jsonl`, 26 cases.
+- **Coverage:** direct policy questions across Acme, Northstar and Orbit; paraphrases; cross-company traps; adversarial/prompt-injection cases; and topics not covered by policy.
+- **Gold checks:** `tests/test_eval_set.py` validates expected facts against actual policy sections, checks forbidden facts, and confirms not-covered topics are absent.
+- **Execution:** each run builds isolated temporary SQLite and Chroma storage, seeds policies, authenticates as the case's company user, and calls the question service through FastAPI's TestClient.
+- **Pass criteria:** required facts and citation section for answerable cases; transport-desk direction for not-covered cases; no forbidden facts; zero tenant/version leakage; at most three citations; at most two LLM calls; citations must match retrieved/stored metadata.
+- **Latency:** measured per question, including the configured LLM call when used.
+
+## 3. Latest real-provider results
+
+| Metric | Latest result |
+|---|---:|
+| Provider / model | Groq / `openai/gpt-oss-20b` |
+| Embedding | MiniLM (`minilm`) |
+| Chunking | Section-aware |
+| Cases / passed | **26 / 26** |
+| Answer correctness | **1.000** |
+| Retrieval hit@3 | **1.000** |
+| Citation validity / coverage | **1.000 / 1.000** |
+| Abstention precision / recall | **1.000 / 1.000** |
+| Tenant leakage / version leakage | **0 / 0** |
+| Latency samples | 26 |
+| Latency p50 / p95 | 969.4 ms / 1,963.9 ms |
+| Average / maximum LLM calls | 1.0 / 1 |
+| Indexed chunks | 25 |
+
+These are results from the recorded run, not a guarantee that future provider responses will be identical.
+
+## 4. Automated test suite
+
+Command:
 
 ```bash
-docker compose exec api python -m scripts.evaluate --repeat 5      # main run
-docker compose exec api python -m scripts.evaluate --compare       # bonus before/after
-docker compose exec api pytest -q                                    # 95 tests, offline
+docker compose exec api pytest --durations=15 -q
 ```
-Offline numbers below: `EMBEDDING_PROVIDER=hash LLM_PROVIDER=extractive python -m scripts.evaluate --repeat 5` (Linux sandbox, Python 3.13, 130 latency samples).
 
-## 4. Results (offline stand-ins, section-aware chunking)
+Latest result:
 
-| Metric | Value |
-|---|---|
-| Cases / passed | 26 / 20 |
-| Answer correctness | 0.769 |
-| Retrieval hit@3 | 0.895 |
-| Citation validity / coverage | 1.0 / 1.0 |
-| Abstention precision / recall | 0.667 / 0.50 |
-| **Tenant leakage / version leakage** | **0 / 0** |
-| LLM calls avg / max | 0.88 / 1 (max allowed 2) |
-| Latency p50 / p95 | 5.6 ms / 6.8 ms (no network LLM: measures our own pipeline only) |
+```text
+95 passed in 371.74s (0:06:11)
+```
 
-Test suite: 95 passed (auth, isolation, ingestion/versioning/failed ingestion, retrieval, question handling incl. timeouts and malformed output, evaluation-set verification and repeatability). I also sabotaged the safety code on purpose (removed the post-retrieval tenant check; removed the company filter in Chroma) and confirmed tests failed; removing the explicit cited-id check was *not* caught by a test because a second layer (citation lookup) fails closed with identical behaviour.
+Slowest tests:
 
-## 5. Bonus: chunking experiment (same 26 cases, same policies/prompt/embedder/threshold/machine)
+| Test | Duration |
+|---|---:|
+| `test_runner_is_repeatable_and_leak_free` | 210.49 s |
+| `test_runner_with_fake_llm_that_always_abstains` | 104.70 s |
+| Remaining slowest setup | approximately 1.3–2.0 s each |
 
-Baseline = fixed 500-char windows with 100 overlap, ignoring headings (section label = last heading before the window). Candidate = one chunk per policy section with the heading in the text.
+The suite passes completely. Most runtime is concentrated in two evaluation-runner tests that execute repeated end-to-end evaluation work. This is a test-suite performance issue, not a failing test or runtime API failure. Pytest uses fake LLMs and offline embeddings; it does not require a live provider.
 
-| Metric | Fixed (before) | Section-aware (after) |
-|---|---|---|
-| Answer correctness | 0.308 (8/26) | **0.769 (20/26)** |
+## 5. Reproduction
+
+```bash
+# Automated tests
+docker compose exec api pytest -q
+
+# Real-provider 26-case evaluation
+docker compose exec api python -m scripts.evaluate
+
+# More latency samples
+docker compose exec api python -m scripts.evaluate --repeat 5
+
+# Fixed-vs-section-aware retrieval experiment
+docker compose exec api python -m scripts.evaluate --compare
+```
+
+Keep provider/model, embedding, chunking configuration and policy fixtures fixed when comparing runs. Store `evaluation/results.jsonl` and `evaluation/metrics.json` from the same run together.
+
+## 6. Bonus: section-aware chunking experiment
+
+The comparison uses the same 26 questions, policy files, hash embedder, extractive stand-in and relevance threshold. Only chunking changes.
+
+| Metric | Fixed windows | Section-aware |
+|---|---:|---:|
+| Cases passed | 8/26 | **20/26** |
+| Answer correctness | 0.308 | **0.769** |
 | Retrieval hit@3 | 0.158 | **0.895** |
-| Citation validity | 1.0 | 1.0 |
-| Abstention precision / recall | 0.375 / 0.75 | 0.667 / 0.50 |
-| Chunks in index (3 policies) | 15 | 25 |
-| Latency p95 (offline) | 6.2 ms | 7.3 ms |
+| Citation validity / coverage | 1.000 / 1.000 | 1.000 / 1.000 |
+| Abstention precision / recall | 0.375 / 0.750 | 0.667 / 0.500 |
+| Indexed chunks | 15 | 25 |
+| Offline latency p95 | 6.2 ms | 7.3 ms |
 | Tenant / version leakage | 0 / 0 | 0 / 0 |
 
-**Reading it honestly.** The gap is large partly because the offline embedder is lexical and fixed windows blur topics together, and because fixed chunks often get the *wrong section label* (e.g. an airport rule labelled as "Ad-hoc trips"), which fails the citation check even when the text is right. With a real embedding model the gap will likely shrink; re-run `--compare` to see. The abstention numbers *worsen* for section chunking because small mismatched chunks no longer fall below the threshold by accident - abstention is the LLM's job (see trade-off 2).
-**Cost:** +10 chunks (more vectors), slightly higher retrieval latency in this run, and one more concept (heading parser) to maintain. The parser is ~15 lines and fails loudly on a policy with no `## ` headings.
+**Interpretation:** section-aware chunking keeps policy rules and headings together, improving retrieval and section-level citation correctness in this offline experiment. It adds ten chunks and a heading parser. The improvement is specific to the lexical hash embedder and extractive stand-in; it should not be treated as the expected gain with MiniLM and a real LLM.
 
-## 6. Real-model results - TO FILL IN after running on your machine
+## 7. Trade-offs and limitations
 
-| Metric | Value |
-|---|---|
-| Provider / model / embedding | e.g. groq / llama-3.1-8b-instant / minilm |
-| Machine / network | |
-| Cases passed | / 26 |
-| Retrieval hit@3 | |
-| Abstention precision / recall | |
-| Latency p50 / **p95** (n ≥ 100, use `--repeat 5`) | / ms (target ≤ 3000) |
-| LLM calls avg / max | |
-| `MAX_DISTANCE` chosen via `--show-distances` | |
+1. **Section-aware chunks over fixed windows:** better rule/heading alignment in the measured offline experiment; more vectors and a parser to maintain.
+2. **Lenient threshold plus LLM abstention:** protects recall when answerable and not-covered distance ranges overlap; costs an LLM call on some questions that a perfect threshold could reject without generation.
+3. **No automatic LLM retry:** avoids doubling latency and quota; malformed output or provider failures return a retry response.
+4. **Embedded ChromaDB:** simplifies one-command deployment; the API process owns the vector index, limiting horizontal scaling.
+5. **Demo JWT identity store:** self-contained for the case study; production should integrate the organisation's identity provider.
+6. **Thread-based timeouts:** a timed-out worker may continue running; production should use cancellable async clients and resource monitoring.
 
-Do not claim the 3-second target until this row is filled with a measured number.
-
-## 7. Known failures (offline run) and why
-
-| Case | Failure | Cause |
-|---|---|---|
-| A05 pets, O03 airport | answered instead of "not covered" | Extractive stand-in cannot abstain; word overlap ("trip", "approval") puts a chunk under the threshold. A real LLM is expected to return `answerable:false`; verify in Section 6. |
-| P03 "reserve a ride" | wrongly `not_covered` | Hash embedder has no synonyms ("reserve" ≠ "book"): best distance 0.97 > threshold. MiniLM should handle it. |
-| A08 cost cap, N04 no-show fee, X02 | wrong section retrieved | Lexical embedder ranks a chunk with more shared common words above the right one. |
-
-Other limits: English only; Markdown only; each question is independent; contradictory statements *inside* one policy are not detected; `extractive` quality says nothing about real hallucination rate; thread timeouts abandon rather than cancel stuck calls; worst-case failure-path latency is retrieval 0.8 s + LLM guard 2.5 s ≈ 3.3 s (lower `LLM_TIMEOUT_SECONDS` to tighten).
-
-## 8. Trade-off chosen (required)
-
-*Threshold lenient + LLM abstention, rather than a strict relevance threshold.* `--show-distances` shows answerable and not-covered questions overlapping in distance (offline: answerable max 0.965, not-covered min 0.775), so a strict cut-off would either refuse valid questions or let silent topics through. A lenient cut-off protects recall; the LLM must then abstain, and the evaluation tracks abstention precision/recall to measure that. Cost: one LLM call on silent-topic questions that a perfect threshold would have answered with zero calls.
+Other limitations include English-only Markdown policies, independent questions without conversation memory, and a finite synthetic evaluation set. Passing tests and evaluation does not prove the system is free of every possible security or answer-quality defect.
