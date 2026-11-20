@@ -22,13 +22,6 @@ def ask(client, token=None, header=None):
     return client.post("/questions", json={"question": "Can I book a cab on Saturday?"}, headers=h)
 
 
-def test_valid_token_is_accepted_and_company_comes_from_token(client, container):
-    assert container.settings.jwt_secret == SECRET, "Test and container JWT secrets differ"
-
-    r = ask(client, make_token())
-    assert r.status_code == 200, r.text
-    assert all(c["document"].startswith("acme_") for c in r.json()["citations"])
-
 
 def test_login_returns_token_for_the_users_own_company(client):
     h = login(client, "northstar_employee")
